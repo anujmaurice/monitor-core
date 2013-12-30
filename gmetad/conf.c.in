@@ -285,6 +285,38 @@ static DOTCONF_CB(cb_carbon_timeout)
    c->carbon_timeout = cmd->data.value;
    return NULL;
 }
+/* fengine confs starts here */
+static DOTCONF_CB(cb_fengine_server)
+{
+   gmetad_config_t *c = (gmetad_config_t*) cmd->option->info;
+   debug_msg("Enabling Fengine proxy to %s", cmd->data.str);
+   c->fengine_server = strdup (cmd->data.str);
+   return NULL;
+}
+
+static DOTCONF_CB(cb_fengine_port)
+{
+   gmetad_config_t *c = (gmetad_config_t*) cmd->option->info;
+   debug_msg("Setting fengine port to %ld", cmd->data.value);
+   c->fengine_port = cmd->data.value;
+   return NULL;
+}
+
+static DOTCONF_CB(cb_fengine_protocol)
+{
+   gmetad_config_t *c = (gmetad_config_t*) cmd->option->info;
+   debug_msg("Setting fengine protocol to %s", cmd->data.str);
+   c->fengine_protocol = strdup (cmd->data.str);
+   return NULL;
+}
+
+static DOTCONF_CB(cb_fengine_timeout)
+{
+   gmetad_config_t *c = (gmetad_config_t*) cmd->option->info;
+   debug_msg("Setting fengine timeout to %ld", cmd->data.value);
+   c->carbon_timeout = cmd->data.value;
+   return NULL;
+}
 
 static DOTCONF_CB(cb_memcached_parameters)
 {
@@ -395,6 +427,10 @@ static configoption_t gmetad_options[] =
       {"carbon_port", ARG_INT, cb_carbon_port, &gmetad_config, 0},
       {"carbon_protocol", ARG_STR, cb_carbon_protocol, &gmetad_config, 0},
       {"carbon_timeout", ARG_INT, cb_carbon_timeout, &gmetad_config, 0},
+      {"fengine_server", ARG_STR, cb_fengine_server, &gmetad_config, 0},
+      {"fengine_port", ARG_INT, cb_fengine_port, &gmetad_config, 0},
+      {"fengine_protocol", ARG_STR, cb_fengine_protocol, &gmetad_config, 0},
+      {"fengine_timeout", ARG_INT, cb_fengine_timeout, &gmetad_config, 0},
       {"memcached_parameters", ARG_STR, cb_memcached_parameters, &gmetad_config, 0},
       {"graphite_prefix", ARG_STR, cb_graphite_prefix, &gmetad_config, 0},
       {"graphite_path", ARG_STR, cb_graphite_path, &gmetad_config, 0},
@@ -432,6 +468,9 @@ set_defaults (gmetad_config_t *config)
    config->carbon_port = 2003;
    config->carbon_protocol = "tcp";
    config->carbon_timeout = 500;
+   config->fengine_port = 2014;
+   config->fengine_protocol = "tcp";
+   config->fengine_timeout = 500;
    config->riemann_port = 5555;
    config->riemann_protocol = "udp";
    config->riemann_attributes = NULL;

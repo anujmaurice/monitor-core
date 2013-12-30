@@ -40,6 +40,7 @@ extern int number_of_datasources ( char *config_file );
 extern struct type_tag* in_type_list (char *, unsigned int);
 
 extern g_udp_socket *carbon_udp_socket;
+extern g_udp_socket *fengine_udp_socket;
 
 #ifdef WITH_RIEMANN
 extern g_udp_socket *riemann_udp_socket;
@@ -444,6 +445,18 @@ main ( int argc, char *argv[] )
                   err_quit("carbon %s socket failed for %s:%d", c->carbon_protocol, c->carbon_server, c->carbon_port);
             }
          debug_msg("carbon forwarding ready to send via %s to %s:%d", c->carbon_protocol, c->carbon_server, c->carbon_port);
+      }
+/* Forward metrics to Fengine using fengine protocol */
+    if (c->fengine_server != NULL)
+      {
+         if (!strcmp(c->fengine_protocol, "udp"))
+            {
+               fengine_udp_socket = init_fengine_udp_socket (c->fengine_server, c->fengine_port);
+
+               if (fengine_udp_socket == NULL)
+                  err_quit("fengine %s socket failed for %s:%d", c->fengine_protocol, c->fengine_server, c->fengine_port);
+            }
+         debug_msg("fengine forwarding ready to send via %s to %s:%d", c->fengine_protocol, c->fengine_server, c->fengine_port);
       }
 
 #ifdef WITH_RIEMANN

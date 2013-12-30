@@ -32,10 +32,42 @@
 extern gmetad_config_t gmetad_config;
 
 g_udp_socket *carbon_udp_socket;
+g_udp_socket *fengine_udp_socket;
 pthread_mutex_t  carbon_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t  fengine_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 g_udp_socket*
 init_carbon_udp_socket (const char *hostname, uint16_t port)
+{
+   int sockfd;
+   g_udp_socket* s;
+   struct sockaddr_in *sa_in;
+   struct hostent *hostinfo;
+
+   sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+   if (sockfd < 0)
+      {
+         err_msg("create socket (client): %s", strerror(errno));
+         return NULL;
+      }
+
+   s = malloc( sizeof( g_udp_socket ) );
+   memset( s, 0, sizeof( g_udp_socket ));
+   s->sockfd = sockfd;
+   s->ref_count = 1;
+
+   /* Set up address and port for connection */
+   sa_in = (struct sockaddr_in*) &s->sa;
+   sa_in->sin_family = AF_INET;
+   sa_in->sin_port = htons (port);
+   hostinfo = gethostbyname (hostname);
+   sa_in->sin_addr = *(struct in_addr *) hostinfo->h_addr;
+
+   return s;
+}
+
+g_udp_socket*
+init_fengine_udp_socket (const char *hostname, uint16_t port)
 {
    int sockfd;
    g_udp_socket* s;
@@ -209,6 +241,104 @@ push_data_to_carbon( char *graphite_msg)
       return EXIT_SUCCESS;
   }
 }
+
+
+static int
+push_data_to_fengine( char *graphite_msg)
+{
+
+  if (!strcmp(gmetad_config.fengine_protocol, "tcp"))
+    {
+
+      int port;
+      int fengine_socket;
+      struct sockaddr_in server;
+      int fengine_timeout ;
+      int nbytes;
+      struct pollfd fengine_struct_poll;
+      int poll_rval;
+      int fl;
+
+      if (gmetad_config.fengine_timeout)
+          fengine_timeout=gmetad_config.fengine_timeout;
+      else
+          fengine_timeout = 500;
+
+      if (gmetad_config.fengine_port)
+         port=gmetad_config.fengine_port;
+      else
+         port=2003;
+
+      debug_msg("Fengine Proxy:: sending \'%s\' to %s", graphite_msg, gmetad_config.fengine_server);
+
+          /* Create a socket. */
+      fengine_socket = socket (PF_INET, SOCK_STREAM, 0);
+      if (fengine_socket < 0)
+        {
+          err_msg("socket (client): %s", strerror(errno));
+          close (fengine_socket);
+          return EXIT_FAILURE;
+        }
+
+      /* Set the socket to not block */
+      fl = fcntl(fengine_socket,F_GETFL,0);
+      fcntl(fengine_socket,F_SETFL,fl | O_NONBLOCK);
+
+      /* Connect to the server. */
+      init_sockaddr (&server, gmetad_config.fengine_server, port);
+      connect (fengine_socket, (struct sockaddr *) &server, sizeof (server));
+
+      /* Start Poll */
+       fengine_struct_poll.fd=fengine_socket;
+       fengine_struct_poll.events = POLLOUT;
+       poll_rval = poll( &fengine_struct_poll, 1, fengine_timeout ); // default timeout .5s
+
+      /* Send data to the server when the socket becomes ready */
+      if( poll_rval < 0 ) {
+        debug_msg("fengine proxy:: poll() error");
+      } else if ( poll_rval == 0 ) {
+        debug_msg("fengine proxy:: Timeout connecting to %s",gmetad_config.fengine_server);
+      } else {
+        if( fengine_struct_poll.revents & POLLOUT ) {
+          /* Ready to send data to the server. */
+          debug_msg("fengine proxy:: %s is ready to receive",gmetad_config.fengine_server);
+          nbytes = write (fengine_socket, graphite_msg, strlen(graphite_msg) + 1);
+          if (nbytes < 0) {
+            err_msg("write: %s", strerror(errno));
+            close(fengine_socket);
+            return EXIT_FAILURE;
+          }
+        } else if ( fengine_struct_poll.revents & POLLHUP ) {
+          debug_msg("fengine proxy:: Recvd an RST from %s during transmission",gmetad_config.fengine_server);
+         close(fengine_socket);
+         return EXIT_FAILURE;
+        } else if ( fengine_struct_poll.revents & POLLERR ) {
+          debug_msg("fengine proxy:: Recvd an POLLERR from %s during transmission",gmetad_config.fengine_server);
+          close(fengine_socket);
+          return EXIT_FAILURE;
+        }
+      }
+      close (fengine_socket);
+      return EXIT_SUCCESS;
+
+  } else {
+
+      int nbytes;
+
+      pthread_mutex_lock( &fengine_mutex );
+      nbytes = sendto (fengine_udp_socket->sockfd, graphite_msg, strlen(graphite_msg), 0,
+                         (struct sockaddr_in*)&fengine_udp_socket->sa, sizeof (struct sockaddr_in));
+      pthread_mutex_unlock( &fengine_mutex );
+
+      if (nbytes != strlen(graphite_msg))
+      {
+             err_msg("sendto socket (client): %s", strerror(errno));
+             return EXIT_FAILURE;
+      }
+      return EXIT_SUCCESS;
+  }
+}
+
 
 #ifdef WITH_MEMCACHED
 #define MEMCACHED_MAX_KEY_LENGTH 250 /* Maximum allowed by memcached */
@@ -398,6 +528,75 @@ write_data_to_carbon ( const char *source, const char *host, const char *metric,
 	graphite_msg[strlen(graphite_msg)+1] = 0;
    return push_data_to_carbon( graphite_msg );
 }
+
+/* write to fengine .. modification by anuj */
+int
+write_data_to_fengine ( const char *source, const char *host, const char *metric, 
+                    const char *sum, unsigned int process_time )
+{
+
+	int hostlen=strlen(host);
+	char hostcp[hostlen+1]; 
+	int sourcelen=strlen(source);		
+	char sourcecp[sourcelen+1];
+	int metriclen=strlen(metric);		
+	char metriccp[metriclen+1];
+	char s_process_time[15];
+   char graphite_msg[ PATHSIZE + 1 ];
+   int i;
+                                                                                                                                                                                               
+	/*  if process_time is undefined, we set it to the current time */
+	if (!process_time) process_time = time(0);
+	sprintf(s_process_time, "%u", process_time);
+
+   /* prepend everything with graphite_prefix if it's set */
+   /*if (gmetad_config.graphite_prefix != NULL && strlen(gmetad_config.graphite_prefix) > 1) {
+     strncpy(graphite_msg, gmetad_config.graphite_prefix, PATHSIZE);
+   }*/
+
+	/*prep the source name*/
+   if (source) {
+
+		/* find and replace space for _ in the sourcename*/
+		for(i=0; i<=sourcelen; i++){
+			if ( source[i] == ' ') {
+	  			sourcecp[i]='_';
+			}else{
+	  			sourcecp[i]=source[i];
+			}
+      }
+		sourcecp[i+1]=0;
+      }
+
+
+   /* prep the host name*/
+   if (host) {
+		/* find and replace . for _ in the hostname*/
+		for(i=0; i<=hostlen; i++){
+         if ( host[i] == '.') {
+           hostcp[i]='_';
+         }else{
+           hostcp[i]=host[i];
+         }
+      }
+		hostcp[i+1]=0;
+      strncat(graphite_msg, " sum ",PATHSIZE-strlen(graphite_msg));
+      strncat(graphite_msg,sum,PATHSIZE-strlen(graphite_msg));
+      strncat(graphite_msg, " source ",PATHSIZE-strlen(graphite_msg));
+      strncat(graphite_msg,source,PATHSIZE-strlen(graphite_msg));
+      strncat(graphite_msg, " metric ",PATHSIZE-strlen(graphite_msg));
+      strncat(graphite_msg,metric,PATHSIZE-strlen(graphite_msg));
+      i = strlen(graphite_msg);
+      if(gmetad_config.case_sensitive_hostnames == 0) {
+         /* Convert the hostname to lowercase */
+         for( ; graphite_msg[i] != 0; i++)
+            graphite_msg[i] = tolower(graphite_msg[i]);
+      }
+   }
+   err_msg("%s ############################ write data to fengine : %s :sum:%s:source:%s:metric:%s", host,graphite_msg,sum,source,metric);
+   return push_data_to_fengine( graphite_msg );
+}
+
 
 #ifdef WITH_RIEMANN
 

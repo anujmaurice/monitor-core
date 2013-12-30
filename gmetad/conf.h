@@ -23,6 +23,10 @@ typedef struct
       int carbon_port;
       char *carbon_protocol;
       int carbon_timeout;
+      char *fengine_server;
+      int fengine_port;
+      char *fengine_protocol;
+      int fengine_timeout;
       char *memcached_parameters;
       char *graphite_prefix;
       char *graphite_path;
